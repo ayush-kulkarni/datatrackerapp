@@ -54,6 +54,9 @@ dependencies {
     implementation(libs.android.mail)
     implementation(libs.android.activation)
 
+    // WorkManager for background tasks
+    implementation(libs.androidx.work.runtime.ktx)
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)

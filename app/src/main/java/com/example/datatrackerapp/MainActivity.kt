@@ -20,18 +20,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import androidx.work.*
 import com.example.datatrackerapp.ui.theme.DatatrackerappTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 class MainActivity : ComponentActivity() {
 
-    private lateinit var dataCollector: DeviceDataCollector
     private lateinit var systemEventReceiver: SystemEventReceiver
     private val scope = CoroutineScope(Dispatchers.IO)
     private var isReceiverRegistered = false
@@ -40,7 +37,7 @@ class MainActivity : ComponentActivity() {
             // This block is called when the user responds to the permission dialog.
             if (permissions.values.all { it }) {
                 // All permissions were granted.
-                collectAndEmailData()
+                scheduleHourlyWork()
             } else {
                 // One or more permissions were denied.
                 println("One or more permissions were denied.")
@@ -72,8 +69,7 @@ class MainActivity : ComponentActivity() {
         isReceiverRegistered = true
 
         // Hourly Poll:
-        dataCollector = DeviceDataCollector(this)
-        checkPermissionsAndCollectData()
+        checkPermissionsAndScheduleWork()
 
         enableEdgeToEdge()
         setContent {
@@ -115,7 +111,7 @@ class MainActivity : ComponentActivity() {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    private fun checkPermissionsAndCollectData() {
+    private fun checkPermissionsAndScheduleWork() {
         println("1")
         if (!hasUsageStatsPermission()) {
             startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
@@ -133,39 +129,32 @@ class MainActivity : ComponentActivity() {
         }.toTypedArray()
 
         if (permissionsToRequest.isEmpty()) {
-            collectAndEmailData()
+            scheduleHourlyWork()
         } else {
             println("here")
             requestPermissionLauncher.launch(permissionsToRequest)
         }
     }
 
-    private fun collectAndEmailData() {
-        val allData = StringBuilder()
-        println("4")
-        // Use the dataCollector instance to get the information
-        val usageStats = dataCollector.getUsageStats()
-        val installedApps = dataCollector.getInstalledApps()
-        val sensorData = dataCollector.getSensorData()
-        val cellInfo = dataCollector.getCellInfo()
-        val systemInfo = dataCollector.getSystemInfo()
+    private fun scheduleHourlyWork() {
+        println("Permissions granted. Hourly polling is scheduled.")
 
-        // Location is asynchronous, so we handle it with a callback
-        dataCollector.getCurrentLocation { locationInfo ->
-            allData.append(usageStats)
-                .append("\n").append(installedApps)
-                .append("\n").append(locationInfo)
-                .append("\n").append(sensorData)
-                .append("\n").append(cellInfo)
-                .append("\n").append(systemInfo)
+        // Define constraints for the work, e.g., requires a network connection.
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
 
-            val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-            val emailSender = EmailSender()
-            scope.launch {
-                println("5")
-                emailSender.sendEmail("Hourly Poll - $time", allData.toString())
-            }
-        }
+        // Create a periodic work request that runs once per hour.
+        val periodicWorkRequest = PeriodicWorkRequestBuilder<DataCollectionWorker>(15, TimeUnit.MINUTES) // TODO: Change back to hours after done testing
+            .setConstraints(constraints)
+            .build()
+
+        // Enqueue the unique work. This ensures only one instance of this hourly poll is running.
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "HourlyDataPoll",
+            ExistingPeriodicWorkPolicy.KEEP, // Keep the existing work if it's already scheduled
+            periodicWorkRequest
+        )
     }
 
 }

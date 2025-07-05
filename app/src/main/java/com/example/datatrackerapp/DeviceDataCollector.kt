@@ -21,6 +21,9 @@ import android.telephony.TelephonyManager
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import java.util.Calendar
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 data class AppUsageEvent(
     val packageName: String?,
@@ -114,26 +117,22 @@ class DeviceDataCollector(private val context: Context) {
 
     // TODO: Fix getCurrentLocation()
     @SuppressLint("MissingPermission")
-    fun getCurrentLocation(callback: (String) -> Unit) {
+    suspend fun getCurrentLocation(): String = suspendCancellableCoroutine { continuation ->
         val fusedLocationClient: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(context)
         fusedLocationClient.lastLocation
             .addOnSuccessListener { location ->
                 val result = StringBuilder("## Current Location\n")
                 if (location != null) {
                     result.append("- **Latitude:** ${location.latitude}\n")
-                    result.append("- **Longitude:** ${location.longitude}\n")
-                    result.append("- **Accuracy:** ${location.accuracy} meters\n")
-                    if (location.hasAltitude()) result.append("- **Altitude:** ${location.altitude} meters\n")
-                    if (location.hasSpeed()) result.append("- **Speed:** ${location.speed} m/s\n")
-                    if (location.hasBearing()) result.append("- **Bearing:** ${location.bearing} degrees\n")
-                    result.append("- **Provider:** ${location.provider}\n")
+                        .append("- **Longitude:** ${location.longitude}\n")
+                        .append("- **Accuracy:** ${location.accuracy} meters\n")
                 } else {
                     result.append("- Location not available.\n")
                 }
-                callback(result.toString())
+                continuation.resume(result.toString())
             }
-            .addOnFailureListener {
-                callback("## Current Location\n- Failed to get location.\n")
+            .addOnFailureListener { exception ->
+                continuation.resumeWithException(exception)
             }
     }
 
