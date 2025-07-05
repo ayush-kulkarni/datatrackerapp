@@ -8,53 +8,49 @@ import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.ActivityResultLauncher
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.example.datatrackerapp.ui.theme.DatatrackerappTheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity : ComponentActivity() {
-    private val permissionRequestCode = 101
+
+    private lateinit var dataCollector: DeviceDataCollector
+    private lateinit var systemEventReceiver: SystemEventReceiver
+    private val scope = CoroutineScope(Dispatchers.IO)
+    private var isReceiverRegistered = false
+    private val requestPermissionLauncher: ActivityResultLauncher<Array<String>> =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
+            // This block is called when the user responds to the permission dialog.
+            if (permissions.values.all { it }) {
+                // All permissions were granted.
+                collectAndEmailData()
+            } else {
+                // One or more permissions were denied.
+                println("One or more permissions were denied.")
+                val deniedPermissions = permissions.filter { !it.value }.keys
+                Log.w("Permissions", "Denied permissions: $deniedPermissions")
+            }
+        }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        // Check permissions:
-        if (!hasUsageStatsPermission()) {
-            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-        }
-
-        val permissionsToRequest = mutableListOf<String>()
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.ACCESS_FINE_LOCATION
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            permissionsToRequest.add(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
-        if (ActivityCompat.checkSelfPermission(
-                this,
-                Manifest.permission.READ_PHONE_STATE
-            ) != PackageManager.PERMISSION_GRANTED
-        ) {
-            permissionsToRequest.add(Manifest.permission.READ_PHONE_STATE)
-        }
-
-        if (permissionsToRequest.isNotEmpty()) {
-            ActivityCompat.requestPermissions(
-                this,
-                permissionsToRequest.toTypedArray(),
-                permissionRequestCode
-            )
-        }
-
 
         // BroadcastReceiver stuff:
         val systemEventReceiver = SystemEventReceiver()
@@ -73,9 +69,11 @@ class MainActivity : ComponentActivity() {
             filter,
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
+        isReceiverRegistered = true
 
         // Hourly Poll:
-
+        dataCollector = DeviceDataCollector(this)
+        checkPermissionsAndCollectData()
 
         enableEdgeToEdge()
         setContent {
@@ -90,6 +88,23 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        // Cancel the coroutine scope when the activity is destroyed
+        scope.cancel()
+        // Unregister the SystemEventReceiver
+        if (isReceiverRegistered) {
+            try {
+                unregisterReceiver(systemEventReceiver)
+                isReceiverRegistered = false
+                Log.d("MainActivity", "SystemEventReceiver unregistered.")
+            } catch (e: IllegalArgumentException) {
+                Log.w("MainActivity", "SystemEventReceiver was not registered or already unregistered: ${e.message}")
+            }
+        }
+    }
+
+
     private fun hasUsageStatsPermission(): Boolean {
         val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
         val mode = appOps.checkOpNoThrow(
@@ -98,6 +113,59 @@ class MainActivity : ComponentActivity() {
             packageName
         )
         return mode == AppOpsManager.MODE_ALLOWED
+    }
+
+    private fun checkPermissionsAndCollectData() {
+        println("1")
+        if (!hasUsageStatsPermission()) {
+            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+        }
+
+        val requiredPermissions = arrayOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.READ_PHONE_STATE
+        )
+
+        // Check which permissions are already granted.
+        val permissionsToRequest = requiredPermissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
+
+        if (permissionsToRequest.isEmpty()) {
+            collectAndEmailData()
+        } else {
+            println("here")
+            requestPermissionLauncher.launch(permissionsToRequest)
+        }
+    }
+
+    private fun collectAndEmailData() {
+        val allData = StringBuilder()
+        println("4")
+        // Use the dataCollector instance to get the information
+        val usageStats = dataCollector.getUsageStats()
+        val installedApps = dataCollector.getInstalledApps()
+        val sensorData = dataCollector.getSensorData()
+        val cellInfo = dataCollector.getCellInfo()
+        val systemInfo = dataCollector.getSystemInfo()
+
+        // Location is asynchronous, so we handle it with a callback
+        dataCollector.getCurrentLocation { locationInfo ->
+            allData.append(usageStats)
+                .append("\n").append(installedApps)
+                .append("\n").append(locationInfo)
+                .append("\n").append(sensorData)
+                .append("\n").append(cellInfo)
+                .append("\n").append(systemInfo)
+
+            val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
+            val emailSender = EmailSender()
+            scope.launch {
+                println("5")
+                emailSender.sendEmail("Hourly Poll - $time", allData.toString())
+            }
+        }
     }
 
 }
