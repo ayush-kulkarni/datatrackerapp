@@ -18,7 +18,7 @@ class SystemEventReceiver : BroadcastReceiver() {
         val action = intent.action ?: return
         val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
         var subject = "System Event"
-        var body = "Event: $action at $time"
+        val body = "Event: $action at $time"
 
         when (action) {
             Intent.ACTION_SCREEN_ON -> subject = "Screen ON"
@@ -27,17 +27,6 @@ class SystemEventReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED -> subject = "Device Rebooted"
             Intent.ACTION_BATTERY_LOW -> subject = "Battery Low"
             Intent.ACTION_BATTERY_CHANGED -> subject = "Battery Status Changed"
-            Intent.ACTION_PACKAGE_ADDED -> {
-                subject = "Application Installed"
-                val packageName = intent.data?.schemeSpecificPart
-                body += "\nPackage: $packageName"
-            }
-
-            Intent.ACTION_PACKAGE_REMOVED -> {
-                subject = "Application Uninstalled"
-                val packageName = intent.data?.schemeSpecificPart
-                body += "\nPackage: $packageName"
-            }
         }
         scope.launch {
             emailSender.sendEmail(subject, body)

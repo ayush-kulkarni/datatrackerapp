@@ -115,7 +115,6 @@ class DeviceDataCollector(private val context: Context) {
         return result.toString()
     }
 
-    // TODO: Fix getCurrentLocation()
     @SuppressLint("MissingPermission")
     suspend fun getCurrentLocation(): String = suspendCancellableCoroutine { continuation ->
         val fusedLocationClient: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(context)
@@ -136,7 +135,6 @@ class DeviceDataCollector(private val context: Context) {
             }
     }
 
-    // TODO: Fix getSensorData()
     fun getSensorData(): String {
         val result = StringBuilder("## Sensor Data\n")
         val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)

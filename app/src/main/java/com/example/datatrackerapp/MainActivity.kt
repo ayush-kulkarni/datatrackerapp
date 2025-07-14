@@ -26,6 +26,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
 import java.util.concurrent.TimeUnit
+import android.os.Build
 
 class MainActivity : ComponentActivity() {
 
@@ -37,7 +38,8 @@ class MainActivity : ComponentActivity() {
             // This block is called when the user responds to the permission dialog.
             if (permissions.values.all { it }) {
                 // All permissions were granted.
-                scheduleHourlyWork()
+                Log.d("MainActivity", "All permissions granted. Starting services.")
+                startServices()
             } else {
                 // One or more permissions were denied.
                 println("One or more permissions were denied.")
@@ -49,6 +51,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        checkPermissionsAndStartServices()
+
         // BroadcastReceiver stuff:
         val systemEventReceiver = SystemEventReceiver()
         val filter = IntentFilter()
@@ -56,20 +60,15 @@ class MainActivity : ComponentActivity() {
         filter.addAction(Intent.ACTION_SCREEN_OFF)
         filter.addAction(Intent.ACTION_USER_PRESENT)
         filter.addAction(Intent.ACTION_BOOT_COMPLETED)
-        filter.addAction(Intent.ACTION_BATTERY_LOW)
-        filter.addAction(Intent.ACTION_BATTERY_CHANGED)
-        filter.addAction(Intent.ACTION_PACKAGE_ADDED)
-        filter.addAction(Intent.ACTION_PACKAGE_REMOVED)
+         filter.addAction(Intent.ACTION_BATTERY_LOW)
+        // filter.addAction(Intent.ACTION_BATTERY_CHANGED) // This is very noisy. Consider if it's really needed or handle it differently.
         ContextCompat.registerReceiver(
-            this,
+            applicationContext, // Use applicationContext for receivers not tied to UI lifecycle
             systemEventReceiver,
             filter,
             ContextCompat.RECEIVER_NOT_EXPORTED
         )
         isReceiverRegistered = true
-
-        // Hourly Poll:
-        checkPermissionsAndScheduleWork()
 
         enableEdgeToEdge()
         setContent {
@@ -100,6 +99,55 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun checkPermissionsAndStartServices() {
+        // First, check for the special "Usage Access" permission.
+        if (!hasUsageStatsPermission()) {
+            println("Please grant Usage Access permission")
+            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+            println("Waiting for Usage Access permission...")
+            // The user will need to restart the app after granting this.
+            return
+        }
+
+        // Define all required runtime permissions.
+        val requiredPermissions = mutableListOf(
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.ACCESS_COARSE_LOCATION,
+            Manifest.permission.READ_PHONE_STATE
+        )
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            requiredPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
+        }
+
+        // Filter out permissions that are already granted.
+        val permissionsToRequest = requiredPermissions.filter {
+            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
+        }.toTypedArray()
+
+        if (permissionsToRequest.isEmpty()) {
+            // All permissions are already granted.
+            Log.d("MainActivity", "Permissions already granted. Starting services.")
+            startServices()
+        } else {
+            // Request the missing permissions.
+            Log.d("MainActivity", "Requesting permissions: ${permissionsToRequest.joinToString()}")
+            requestPermissionLauncher.launch(permissionsToRequest)
+        }
+    }
+
+    private fun startServices() {
+        println("Starting background services...")
+        scheduleHourlyWork()
+        startTightPollingService()
+        println("Hourly and tight-polling services are active.")
+    }
+
+    private fun startTightPollingService() {
+        val serviceIntent = Intent(this, TightPollingService::class.java)
+        startForegroundService(serviceIntent)
+        Log.d("MainActivity", "Tight polling foreground service started.")
+    }
 
     private fun hasUsageStatsPermission(): Boolean {
         val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
@@ -111,31 +159,6 @@ class MainActivity : ComponentActivity() {
         return mode == AppOpsManager.MODE_ALLOWED
     }
 
-    private fun checkPermissionsAndScheduleWork() {
-        println("1")
-        if (!hasUsageStatsPermission()) {
-            startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-        }
-
-        val requiredPermissions = arrayOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.READ_PHONE_STATE
-        )
-
-        // Check which permissions are already granted.
-        val permissionsToRequest = requiredPermissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }.toTypedArray()
-
-        if (permissionsToRequest.isEmpty()) {
-            scheduleHourlyWork()
-        } else {
-            println("here")
-            requestPermissionLauncher.launch(permissionsToRequest)
-        }
-    }
-
     private fun scheduleHourlyWork() {
         println("Permissions granted. Hourly polling is scheduled.")
 
@@ -145,7 +168,7 @@ class MainActivity : ComponentActivity() {
             .build()
 
         // Create a periodic work request that runs once per hour.
-        val periodicWorkRequest = PeriodicWorkRequestBuilder<DataCollectionWorker>(15, TimeUnit.MINUTES) // TODO: Change back to hours after done testing
+        val periodicWorkRequest = PeriodicWorkRequestBuilder<DataCollectionWorker>(1, TimeUnit.HOURS)
             .setConstraints(constraints)
             .build()
 
