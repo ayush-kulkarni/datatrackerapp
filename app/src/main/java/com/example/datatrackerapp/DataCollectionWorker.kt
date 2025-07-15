@@ -8,11 +8,21 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+/**
+ * DataCollectionWorker is a CoroutineWorker responsible for collecting various device data
+ * in the background and sending it via email.
+ *
+ * @param appContext The application context.
+ * @param workerParams Parameters to configure the worker.
+ */
 class DataCollectionWorker(
     appContext: Context,
     workerParams: WorkerParameters
 ) : CoroutineWorker(appContext, workerParams) {
 
+    /**
+     * This method is executed when the worker is started. It collects data and sends it.
+     */
     override suspend fun doWork(): Result {
         Log.d("DataCollectionWorker", "Worker starting...")
         val dataCollector = DeviceDataCollector(applicationContext)

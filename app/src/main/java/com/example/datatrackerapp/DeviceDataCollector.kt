@@ -25,17 +25,34 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+/**
+ * Data class to represent an app usage event.
+ *
+ * @property packageName The package name of the app.
+ * @property eventType The type of the event (e.g., ACTIVITY_RESUMED, ACTIVITY_PAUSED).
+ * @property timestamp The time the event occurred.
+ */
 data class AppUsageEvent(
     val packageName: String?,
     val eventType: Int,
     val timestamp: Long
 )
 
+/**
+ * Class responsible for collecting various types of device data.
+ *
+ * @param context The application context.
+ */
+// This class is responsible for collecting various types of data from the device.
+// It requires the application context to access system services and resources.
 class DeviceDataCollector(private val context: Context) {
 
+    // PackageManager is used to retrieve information about installed applications.
     private val packageManager: PackageManager = context.packageManager
+    // SensorManager is used to access device sensors like accelerometer, gyroscope, etc.
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
 
+    // Fetches and formats app usage statistics for the current day.
     fun getUsageStats(): String {
         val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
         val cal = Calendar.getInstance()
@@ -48,7 +65,7 @@ class DeviceDataCollector(private val context: Context) {
 
         val usageEvents = usageStatsManager.queryEvents(startTime, endTime)
 
-        // The list now holds your new data class
+        // A mutable list to store AppUsageEvent objects.
         val events = mutableListOf<AppUsageEvent>()
 
         val event = UsageEvents.Event()
@@ -58,7 +75,7 @@ class DeviceDataCollector(private val context: Context) {
             if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED ||
                 event.eventType == UsageEvents.Event.ACTIVITY_PAUSED) {
 
-                // Create an instance of your data class to snapshot the data
+                // Create an AppUsageEvent object with the relevant data from the system event.
                 val appEvent = AppUsageEvent(
                     packageName = event.packageName,
                     eventType = event.eventType,
@@ -68,11 +85,12 @@ class DeviceDataCollector(private val context: Context) {
             }
         }
 
+        // Sort events by their timestamp to have a chronological order.
         events.sortBy { it.timestamp }
 
         val result = StringBuilder()
         result.append("## App Usage Events (Today)\n")
-        // The loop now uses your AppUsageEvent object
+        // Iterate through the collected and sorted app usage events.
         events.forEach {
             result.append("- **Package:** ${it.packageName}, **Event:** ${getEventType(it.eventType)}, **Timestamp:** ${it.timestamp}\n")
         }
@@ -80,6 +98,7 @@ class DeviceDataCollector(private val context: Context) {
         return result.toString()
     }
 
+    // Helper function to convert event type integer to a readable string.
     private fun getEventType(eventType: Int): String {
         return when (eventType) {
             UsageEvents.Event.ACTIVITY_RESUMED -> "ACTIVITY_RESUMED"
@@ -88,6 +107,7 @@ class DeviceDataCollector(private val context: Context) {
         }
     }
 
+    // Retrieves and formats information about all installed applications.
     fun getInstalledApps(): String {
         val result = StringBuilder("## Installed Applications\n")
         val packages = packageManager.getInstalledPackages(PackageManager.GET_PERMISSIONS)
@@ -115,6 +135,7 @@ class DeviceDataCollector(private val context: Context) {
         return result.toString()
     }
 
+    // Asynchronously fetches the current device location using FusedLocationProviderClient.
     @SuppressLint("MissingPermission")
     suspend fun getCurrentLocation(): String = suspendCancellableCoroutine { continuation ->
         val fusedLocationClient: FusedLocationProviderClient = LocationServices.getFusedLocationProviderClient(context)
@@ -135,12 +156,15 @@ class DeviceDataCollector(private val context: Context) {
             }
     }
 
+    // Retrieves data from the device's accelerometer.
+    // Note: This implementation only captures a single reading and then unregisters the listener.
+    // For continuous monitoring, the listener logic would need to be different.
     fun getSensorData(): String {
         val result = StringBuilder("## Sensor Data\n")
         val accelerometer = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
         // ... add other sensors like gyroscope, etc.
 
-        val sensorListener = object : SensorEventListener {
+        val sensorListener = object : SensorEventListener { // Anonymous inner class for SensorEventListener
             override fun onSensorChanged(event: SensorEvent?) {
                 if (event != null) {
                     val values = event.values.joinToString(", ")
@@ -150,15 +174,18 @@ class DeviceDataCollector(private val context: Context) {
                 } else {
                     result.append("- Sensor not available.\n")
                 }
+                // Important: Unregister the listener to prevent battery drain after getting one reading.
                 sensorManager.unregisterListener(this)
             }
             override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
         }
 
+        // Register the listener for accelerometer data with normal delay.
         sensorManager.registerListener(sensorListener, accelerometer, SensorManager.SENSOR_DELAY_NORMAL)
         return result.toString()
     }
 
+    // Retrieves and formats information about the currently connected cell towers.
     @SuppressLint("MissingPermission")
     fun getCellInfo(): String {
         val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as TelephonyManager
@@ -184,6 +211,7 @@ class DeviceDataCollector(private val context: Context) {
         return result.toString()
     }
 
+    // Retrieves and formats system information, including device uptime and battery status.
     fun getSystemInfo(): String {
         val uptimeMillis = SystemClock.elapsedRealtime()
         val uptimeSeconds = uptimeMillis / 1000

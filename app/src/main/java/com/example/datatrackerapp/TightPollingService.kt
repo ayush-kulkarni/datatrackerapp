@@ -21,8 +21,14 @@ import java.util.Date
 import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
+/**
+ * TightPollingService is a background service responsible for continuously monitoring
+ * the device's location and foreground app usage. It sends email alerts based on
+ * specific triggers like speeding or app launches.
+ */
 class TightPollingService : Service() {
 
+    // Coroutine scope for managing background tasks within the service.
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private lateinit var locationCallback: LocationCallback
@@ -35,10 +41,16 @@ class TightPollingService : Service() {
     private var appInstallUninstallReceiver: BroadcastReceiver? = null
 
     companion object {
+        // Unique ID for the foreground service notification.
         const val NOTIFICATION_ID = 101
+        // Channel ID for the notification.
         const val NOTIFICATION_CHANNEL_ID = "TightPollingChannel"
     }
 
+    /**
+     * Called when the service is first created. Initializes location services and
+     * registers a broadcast receiver for app install/uninstall events.
+     */
     override fun onCreate() {
         super.onCreate()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
@@ -46,6 +58,10 @@ class TightPollingService : Service() {
         registerAppInstallUninstallReceiver()
     }
 
+    /**
+     * Called when the service is started. Promotes the service to a foreground service
+     * and starts location and app usage polling.
+     */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, createNotification())
         Log.d("TightPollingService", "Service started.")
@@ -57,6 +73,11 @@ class TightPollingService : Service() {
     }
 
     private fun createNotification(): Notification {
+        // Create a notification channel for Android Oreo and above.
+        // This is required for foreground services.
+        // The channel defines the importance and behavior of notifications.
+
+        // Notification channel for the foreground service.
         val channel = NotificationChannel(
             NOTIFICATION_CHANNEL_ID,
             "Tight Polling Service",
@@ -65,6 +86,7 @@ class TightPollingService : Service() {
         val manager = getSystemService(NotificationManager::class.java)
         manager.createNotificationChannel(channel)
 
+        // Build the notification that will be displayed to the user.
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Data Tracker Active")
             .setContentText("Monitoring location and app usage.")
@@ -72,6 +94,10 @@ class TightPollingService : Service() {
             .build()
     }
 
+    /**
+     * Sets up the callback for receiving location updates. This callback processes
+     * location data, calculates speed, and triggers speed alerts if necessary.
+     */
     private fun setupLocationCallback() {
         locationCallback = object : LocationCallback() {
             override fun onLocationResult(locationResult: LocationResult) {
@@ -104,6 +130,10 @@ class TightPollingService : Service() {
         }
     }
 
+    /**
+     * Starts requesting location updates from the FusedLocationProviderClient.
+     * Location updates are configured for high accuracy and frequent updates.
+     */
     private fun startLocationUpdates() {
         val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2000)
             .setWaitForAccurateLocation(false)
@@ -111,11 +141,16 @@ class TightPollingService : Service() {
             .setMaxUpdateDelayMillis(3000)
             .build()
 
+        // Check for location permission before requesting updates.
         if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED) {
             fusedLocationClient.requestLocationUpdates(locationRequest, locationCallback, Looper.getMainLooper())
         }
     }
 
+    /**
+     * Starts a coroutine that periodically polls for the current foreground app.
+     * If a new app is launched, an email alert is sent.
+     */
     private fun startAppUsagePolling() {
         serviceScope.launch {
             while (isActive) {
@@ -134,6 +169,10 @@ class TightPollingService : Service() {
         }
     }
 
+    /**
+     * Registers a BroadcastReceiver to listen for app installation and uninstallation events.
+     * When an app is installed or uninstalled, an email alert is sent.
+     */
     private fun registerAppInstallUninstallReceiver() {
         appInstallUninstallReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
@@ -159,6 +198,8 @@ class TightPollingService : Service() {
                 }
             }
         }
+        // Create an IntentFilter to specify the actions the receiver should listen for.
+        // In this case, it's package added (installed) and package removed (uninstalled).
         val intentFilter = IntentFilter()
         intentFilter.addAction(Intent.ACTION_PACKAGE_ADDED)
         intentFilter.addAction(Intent.ACTION_PACKAGE_REMOVED)
@@ -166,6 +207,10 @@ class TightPollingService : Service() {
         registerReceiver(appInstallUninstallReceiver, intentFilter)
     }
 
+    /**
+     * Called when the service is being destroyed. Cleans up resources by removing
+     * location updates, unregistering the broadcast receiver, and canceling coroutines.
+     */
     override fun onDestroy() {
         super.onDestroy()
         fusedLocationClient.removeLocationUpdates(locationCallback)
@@ -174,8 +219,16 @@ class TightPollingService : Service() {
         Log.d("TightPollingService", "Service stopped.")
     }
 
+    /**
+     * This service does not support binding, so it returns null.
+     */
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Helper function to retrieve the application name from its package name.
+     * @param packageName The package name of the application.
+     * @return The application name, or the package name if the app name cannot be found.
+     */
     private fun getAppNameFromPackageName(packageName: String): String {
         return try {
             val packageManager = applicationContext.packageManager
