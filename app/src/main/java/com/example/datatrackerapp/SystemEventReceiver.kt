@@ -1,47 +1,77 @@
 package com.example.datatrackerapp
 
+
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import android.util.Log
+import androidx.work.Constraints
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.workDataOf
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
 /**
- * A BroadcastReceiver that listens for various system events and sends an email notification
- * when one of these events occurs.
- *
- * This receiver is registered in the AndroidManifest.xml to listen for system-wide broadcasts.
+ * Receives system broadcast intents (e.g., boot completed, app updated).
+ * - Logs the received system event to a local file.
+ * - Triggers a background worker (SystemEventUploadWorker) to upload the log file.
  */
 class SystemEventReceiver : BroadcastReceiver() {
 
-    private val emailSender = EmailSender()
-    // CoroutineScope for launching background tasks (sending email) off the main thread.
-    private val scope = CoroutineScope(Dispatchers.IO)
-
     /**
-     * This method is called when the BroadcastReceiver is receiving an Intent broadcast.
+     * Called when a broadcast intent is received.
+     * - Identifies the action of the intent.
+     * - Logs the event and triggers the upload worker.
      */
     override fun onReceive(context: Context, intent: Intent) {
-        // Get the action of the received intent. If it's null, do nothing.
         val action = intent.action ?: return
         val time = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date())
-        var subject = "System Event"
-        val body = "Event: $action at $time"
+        val logMessage = "System Event: $action at $time"
 
-        when (action) {
-            Intent.ACTION_SCREEN_ON -> subject = "Screen ON"
-            Intent.ACTION_SCREEN_OFF -> subject = "Screen OFF"
-            Intent.ACTION_USER_PRESENT -> subject = "User Present (Unlocked)"
-            Intent.ACTION_BOOT_COMPLETED -> subject = "Device Rebooted"
-            Intent.ACTION_BATTERY_LOW -> subject = "Battery Low"
-            Intent.ACTION_BATTERY_CHANGED -> subject = "Battery Status Changed"
+        Log.d("SystemEventReceiver", "Received event: $action")
+
+        // Step 1: Log the event to a local file.
+
+        val logFile = File(context.cacheDir, SystemEventUploadWorker.LOG_FILE_NAME)
+        try {
+            logFile.appendText("$logMessage\n")
+            Log.d("SystemEventReceiver", "Logged event to ${logFile.name}")
+        } catch (e: Exception) {
+            Log.e("SystemEventReceiver", "Failed to write to log file", e)
+            return
         }
-        // Launch a coroutine in the IO dispatcher to send the email in the background.
-        scope.launch {
-            emailSender.sendEmail(subject, body)
+
+        // Step 2: Trigger the upload worker.
+        // Retrieve the saved account name from SharedPreferences.
+        val prefs = context.getSharedPreferences("DriveUploadPrefs", Context.MODE_PRIVATE)
+        val accountName = prefs.getString("ACCOUNT_NAME", null)
+
+        if (accountName.isNullOrEmpty()) {
+            Log.e("SystemEventReceiver", "Cannot trigger upload, account name not found in SharedPreferences.")
+            return
         }
+
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
+
+        val inputData = workDataOf("ACCOUNT_NAME" to accountName)
+
+        val uploadWorkRequest = OneTimeWorkRequestBuilder<SystemEventUploadWorker>()
+            .setConstraints(constraints)
+            .setInputData(inputData)
+            .build()
+
+        // Use a unique name to prevent multiple workers from queuing up for the same task.
+        // If an upload is already pending, this new request will be ignored.
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "SystemEventUpload",
+            androidx.work.ExistingWorkPolicy.KEEP,
+            uploadWorkRequest
+        )
+        Log.d("SystemEventReceiver", "Enqueued SystemEventUploadWorker.")
     }
 }

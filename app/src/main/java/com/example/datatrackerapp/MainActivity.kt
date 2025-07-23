@@ -1,204 +1,240 @@
 package com.example.datatrackerapp
 
 import android.Manifest
+import android.app.Activity
 import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
+import android.content.SharedPreferences
 import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.util.Log
-import androidx.activity.ComponentActivity
-import androidx.activity.compose.setContent
-import androidx.activity.enableEdgeToEdge
+import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.ui.Modifier
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.work.*
-import com.example.datatrackerapp.ui.theme.DatatrackerappTheme
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.cancel
+import com.google.android.gms.auth.api.signin.GoogleSignIn
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions
+import com.google.android.gms.common.api.ApiException
+import com.google.android.gms.common.api.Scope
+import com.google.api.services.drive.DriveScopes
 import java.util.concurrent.TimeUnit
-import android.os.Build
+import androidx.core.content.edit
+
 /**
- * MainActivity is the main entry point of the application.
- * It handles permission requests, sets up the UI, and initiates background services
- * for data collection and system event monitoring.
+ * The main activity of the application.
+ * Handles user authentication (Google Sign-In) and requests necessary runtime permissions.
+ * Once authenticated and permissions are granted, it schedules background tasks for data collection and upload.
+ *
+ * Key functions:
+ * - `onCreate`: Initializes the activity, sets up UI elements, and starts the Google Sign-In process.
+ * - `requestGoogleSignIn`: Initiates the Google Sign-In flow, handling new sign-ins or using existing ones.
+ * - `checkRuntimePermissions`: Checks for required runtime permissions (Location, Phone State, Usage Stats) after successful Google Sign-In.
+ * - `startServices`: If all permissions are granted, this function saves the Google account name and starts background services for data collection and uploading.
+ * - `scheduleHourlyUploadWork`: Schedules a periodic background worker (using WorkManager) to collect and upload data hourly.
+ * - `startTightPollingService`: Starts a foreground service for more frequent data polling.
+ * - `hasUsageStatsPermission`: Checks if the app has the "Usage Access" permission, which is required for app usage tracking.
+ *
+ * ActivityResultLaunchers:
+ * - `googleSignInLauncher`: Handles the result of the Google Sign-In intent.
+ * - `requestPermissionLauncher`: Handles the result of runtime permission requests.
+ *
  */
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
-    // Receiver for system-level events like screen on/off, boot completed, etc.
-    private lateinit var systemEventReceiver: SystemEventReceiver
+    private lateinit var statusTextView: TextView
 
-    // Coroutine scope for managing background tasks tied to the activity's lifecycle.
-    // Dispatchers.IO is used for I/O-bound tasks.
-    private val scope = CoroutineScope(Dispatchers.IO)
+    // Launcher for the Google Sign-In flow.
+    private val googleSignInLauncher: ActivityResultLauncher<Intent> =
+        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                val task = GoogleSignIn.getSignedInAccountFromIntent(result.data)
+                try {
+                    val account = task.getResult(ApiException::class.java)
+                    Log.d("MainActivity", "Google Sign-In successful for ${account.email}")
+                    // After successful sign-in, check other permissions.
+                    checkRuntimePermissions(account)
+                } catch (e: ApiException) {
+                    Log.e("MainActivity", "Google Sign-In failed with status code: ${e.statusCode}")
+                    statusTextView.text = "Google Sign-In failed. Error code: ${e.statusCode}"
+                }
+            } else {
+                statusTextView.text = "Google Sign-In was cancelled by the user."
+            }
+        }
 
-    // Flag to track if the systemEventReceiver has been registered.
-    // This is important to prevent errors when trying to unregister it.
-    private var isReceiverRegistered = false
-
-    // ActivityResultLauncher for handling permission requests.
-    // This modern approach replaces the deprecated onActivityResult method.
-    // It takes an array of permission strings and a callback lambda that is invoked
-    // when the user responds to the permission dialog.
+    // Launcher for standard runtime permissions (Location, Phone, etc.).
     private val requestPermissionLauncher: ActivityResultLauncher<Array<String>> =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-            // This block is called when the user responds to the permission dialog.
-            if (permissions.values.all { it }) {
-                // All permissions were granted.
-                Log.d("MainActivity", "All permissions granted. Starting services.")
-                startServices()
+            val account = GoogleSignIn.getLastSignedInAccount(this)
+            if (permissions.values.all { it } && account != null) {
+                // If all permissions are granted, start the background services.
+                startServices(account)
             } else {
-                // One or more permissions were denied.
-                println("One or more permissions were denied.")
-                val deniedPermissions = permissions.filter { !it.value }.keys
-                Log.w("Permissions", "Denied permissions: $deniedPermissions")
+                statusTextView.text = "Permissions denied. App cannot run."
+                Log.e("MainActivity", "Not all runtime permissions were granted.")
             }
         }
 
     /**
-     * Called when the activity is first created.
-     * This is where you should do all of your normal static set up: create views,
-     * bind data to lists, etc. This method also provides you with a Bundle containing
-     * the activity's previously frozen state, if there was one.
-     *
-     * @param savedInstanceState If the activity is being re-initialized after
-     *     previously being shut down then this Bundle contains the data it most
-     *     recently supplied in onSaveInstanceState(Bundle). Otherwise it is null.
+     * - Initializes the activity.
+     * - Sets the content view and finds the status TextView.
+     * - Initiates the Google Sign-In process.
      */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+        statusTextView = findViewById(R.id.status_textview)
+        // On app start, immediately begin the Google Sign-In process.
+        requestGoogleSignIn()
+    }
 
-        // Check for necessary permissions and start background services if granted.
-        checkPermissionsAndStartServices()
-        // Initialize and register the SystemEventReceiver to listen for system broadcasts.
-        systemEventReceiver = SystemEventReceiver()
-        val filter = IntentFilter().apply {
-            addAction(Intent.ACTION_SCREEN_ON)
-            addAction(Intent.ACTION_SCREEN_OFF)
-            addAction(Intent.ACTION_USER_PRESENT)
-            addAction(Intent.ACTION_BOOT_COMPLETED)
-            addAction(Intent.ACTION_BATTERY_LOW)
-            // Note: Intent.ACTION_BATTERY_CHANGED is very frequent and might be resource-intensive.
-            // Consider if it's truly needed or if its handling can be optimized.
-        }
-        // Use applicationContext for receivers that are not tied to the UI lifecycle,
-        // ensuring they continue to operate even if the activity is destroyed.
-        // RECEIVER_NOT_EXPORTED means the receiver is not intended for use by other apps.
-        ContextCompat.registerReceiver(applicationContext, systemEventReceiver, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
-        isReceiverRegistered = true // Mark the receiver as registered.
-
-        // Enable edge-to-edge display for a more immersive UI.
-        enableEdgeToEdge()
-
-        // Set the content of the activity using Jetpack Compose.
-        setContent {
-            DatatrackerappTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Text(
-                        text = "Device Event Monitor is active.\n\nThis app listens for system events in the background and sends email notifications.\n\nClose this screen; the monitoring will continue.",
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                }
-            }
+    /**
+     * - Updates the status TextView.
+     * - Configures Google Sign-In options, requesting email and Drive file scope.
+     * - If the user is not already signed in, launches the Google Sign-In intent.
+     * - Otherwise, proceeds to check other runtime permissions.
+     */
+    private fun requestGoogleSignIn() {
+        statusTextView.text = "Requesting Google Sign-In..."
+        val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+            .requestEmail()
+            .requestScopes(Scope(DriveScopes.DRIVE_FILE)) // Request permission for Drive
+            .build()
+        val signInClient = GoogleSignIn.getClient(this, gso)
+        // Check if a user is already signed in to avoid showing the dialog every time.
+        val lastSignedInAccount = GoogleSignIn.getLastSignedInAccount(this)
+        if (lastSignedInAccount == null) {
+            googleSignInLauncher.launch(signInClient.signInIntent)
+        } else {
+            Log.d("MainActivity", "Already signed in as ${lastSignedInAccount.email}. Checking other permissions.")
+            checkRuntimePermissions(lastSignedInAccount)
         }
     }
 
     /**
-     * Called when the activity is being destroyed.
-     * This is the final call the activity receives.
+     * - Checks if Usage Stats permission is granted. If not, prompts the user to grant it and returns.
+     * - Gathers a list of required runtime permissions (Location, Phone State, and Post Notifications for Android Tiramisu+).
+     * - Filters out already granted permissions.
+     * - If all permissions are granted, starts the background services. Otherwise, requests the missing permissions.
      */
-    override fun onDestroy() {
-        super.onDestroy()
-        // Cancel the coroutine scope when the activity is destroyed
-        scope.cancel()
-        // Unregister the SystemEventReceiver
-        if (isReceiverRegistered) {
-            try {
-                unregisterReceiver(systemEventReceiver)
-                isReceiverRegistered = false
-                Log.d("MainActivity", "SystemEventReceiver unregistered.")
-            } catch (e: IllegalArgumentException) {
-                Log.w("MainActivity", "SystemEventReceiver was not registered or already unregistered: ${e.message}")
-            }
-        }
-    }
-
-    /**
-     * Checks if all required permissions are granted. If not, it requests them.
-     * If all permissions are granted, it proceeds to start the background services.
-     */
-    private fun checkPermissionsAndStartServices() {
-        // First, check for the special "Usage Access" permission.
+    private fun checkRuntimePermissions(account: GoogleSignInAccount) {
         if (!hasUsageStatsPermission()) {
-            println("Please grant Usage Access permission")
+            Toast.makeText(this, "Please grant Usage Access permission", Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-            println("Waiting for Usage Access permission...")
-            // The user will need to restart the app after granting this.
+            statusTextView.text = "Waiting for Usage Access permission...\nPlease restart the app after granting."
             return
         }
 
-        // Define a list of runtime permissions required by the app.
         val requiredPermissions = mutableListOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
             Manifest.permission.READ_PHONE_STATE
         )
-
-        // For Android 13 (TIRAMISU) and above, POST_NOTIFICATIONS permission is required for sending notifications.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             requiredPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
         }
 
-        // Identify permissions that have not yet been granted.
         val permissionsToRequest = requiredPermissions.filter {
             ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
         }.toTypedArray()
 
         if (permissionsToRequest.isEmpty()) {
-            // All permissions are already granted.
-            Log.d("MainActivity", "Permissions already granted. Starting services.")
-            startServices()
+            startServices(account)
         } else {
-            // Request the missing permissions.
-            Log.d("MainActivity", "Requesting permissions: ${permissionsToRequest.joinToString()}")
             requestPermissionLauncher.launch(permissionsToRequest)
         }
     }
 
     /**
-     * Starts the background services required by the application.
-     * This includes scheduling hourly data collection work and starting a tight polling service.
+     * - Retrieves the Google account name.
+     * - Saves the account name to SharedPreferences for other components to access.
+     * - Updates the status TextView.
+     * - Schedules the hourly data upload worker and starts the tight polling service.
      */
-    private fun startServices() {
-        println("Starting background services...")
-        scheduleHourlyWork()
-        startTightPollingService()
-        println("Hourly and tight-polling services are active.")
+    private fun startServices(account: GoogleSignInAccount) {
+        val accountName = account.account?.name ?: run {
+            statusTextView.text = "Could not get account name."
+            return
+        }
+
+        // Save the account name to SharedPreferences so other components like
+        // the BroadcastReceiver can access it.
+        val prefs: SharedPreferences = getSharedPreferences("DriveUploadPrefs", Context.MODE_PRIVATE)
+        prefs.edit { putString("ACCOUNT_NAME", accountName) }
+        Log.d("MainActivity", "Saved account name to SharedPreferences.")
+
+        statusTextView.text = "Starting services for ${account.email}"
+        scheduleHourlyUploadWork(accountName)
+        startTightPollingService(accountName)
+//        triggerImmediateUploadForTesting(accountName)
+        statusTextView.text = "All services active."
     }
+
     /**
-     * Starts the TightPollingService as a foreground service.
-     * Foreground services are less likely to be killed by the system.
+     * - Defines constraints for the worker (e.g., unmetered network).
+     * - Creates input data containing the Google account name.
+     * - Builds a periodic work request for `DataCollectionWorker` to run hourly.
+     * - Enqueues the unique periodic work request with WorkManager.
      */
-    private fun startTightPollingService() {
-        val serviceIntent = Intent(this, TightPollingService::class.java)
+    private fun scheduleHourlyUploadWork(accountName: String) {
+        val constraints = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.UNMETERED)
+            .build()
+
+        val inputData = workDataOf("ACCOUNT_NAME" to accountName)
+
+        val workRequest = PeriodicWorkRequestBuilder<DataCollectionWorker>(15, TimeUnit.MINUTES)
+            .setConstraints(constraints)
+            .setInputData(inputData)
+            .build()
+
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "HourlyDataPollAndUpload", ExistingPeriodicWorkPolicy.KEEP, workRequest
+        )
+        Log.d("MainActivity", "Regular hourly upload worker scheduled for account: $accountName")
+    }
+
+    /**
+     * This function is commented out but was intended for testing immediate uploads.
+     */
+//    private fun triggerImmediateUploadForTesting(accountName: String) {
+//        Log.d("MainActivity", "Triggering immediate one-time upload for testing for account: $accountName")
+//        val constraints = Constraints.Builder()
+//            .setRequiredNetworkType(NetworkType.CONNECTED)
+//            .build()
+//
+//        val inputData = workDataOf("ACCOUNT_NAME" to accountName)
+//
+//        val testUploadWorkRequest = OneTimeWorkRequestBuilder<DataCollectionWorker>()
+//            .setConstraints(constraints)
+//            .setInputData(inputData)
+//            .build()
+//        WorkManager.getInstance(this).enqueue(testUploadWorkRequest)
+//    }
+
+    /**
+     * - Creates an Intent for `TightPollingService`.
+     * - Puts the Google account name as an extra in the Intent.
+     * - Starts the foreground service.
+     */
+    private fun startTightPollingService(accountName: String) {
+        val serviceIntent = Intent(this, TightPollingService::class.java).apply {
+            putExtra("ACCOUNT_NAME", accountName)
+        }
         startForegroundService(serviceIntent)
         Log.d("MainActivity", "Tight polling foreground service started.")
     }
 
     /**
-     * Checks if the app has been granted the "Usage Access" permission.
-     * This permission allows the app to access information about app usage.
-     *
-     * @return True if the permission is granted, false otherwise.
+     * - Gets the AppOpsManager system service.
+     * - Checks the operation status for GET_USAGE_STATS for the current app.
+     * - Returns true if the permission is allowed, false otherwise.
      */
     private fun hasUsageStatsPermission(): Boolean {
         val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
@@ -209,30 +245,4 @@ class MainActivity : ComponentActivity() {
         )
         return mode == AppOpsManager.MODE_ALLOWED
     }
-
-    /**
-     * Schedules a periodic background task using WorkManager to collect data hourly.
-     * The task is constrained to run only when there is a network connection.
-     */
-    private fun scheduleHourlyWork() {
-        println("Permissions granted. Hourly polling is scheduled.")
-
-        // Define constraints for the work, e.g., requires a network connection.
-        val constraints = Constraints.Builder()
-            .setRequiredNetworkType(NetworkType.CONNECTED)
-            .build()
-
-        // Create a periodic work request that runs once per hour.
-        val periodicWorkRequest = PeriodicWorkRequestBuilder<DataCollectionWorker>(1, TimeUnit.HOURS)
-            .setConstraints(constraints)
-            .build()
-
-        // Enqueue the unique work. This ensures only one instance of this hourly poll is running.
-        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-            "HourlyDataPoll",
-            ExistingPeriodicWorkPolicy.KEEP, // Keep the existing work if it's already scheduled
-            periodicWorkRequest
-        )
-    }
-
 }
