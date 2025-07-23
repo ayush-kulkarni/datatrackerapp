@@ -1,34 +1,40 @@
 package com.example.datatrackerapp
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import java.io.File
 
 /**
- * A [CoroutineWorker] responsible for uploading the tight poll log file (located at an absolute path like `/data/user/0/com.example.datatrackerapp/cache/tight_poll_log.txt`)
- * to Google Drive.
- *
- * This worker is designed to be triggered periodically. Its main purpose is to ensure that
- * locally collected data, stored in a file named `tight_poll_log.txt` within the application's
- * cache directory, is backed up to a remote location (Google Drive).
- * It handles critical aspects such as renaming the file before upload to avoid race conditions
- * if the file is being written to concurrently, and ensures proper cleanup of temporary files.
+ * Worker responsible for uploading the tight poll log file to Google Drive.
+ * - Initializes SharedPreferences to retrieve the account name.
+ * - Defines a companion object for constants like the log file name.
  */
 class TightPollUploadWorker(
     appContext: Context,
     workerParams: WorkerParameters
 ) : CoroutineWorker(appContext, workerParams) {
+    // SharedPreferences instance for accessing saved preferences.
+    // Specifically used here to retrieve the Google account name.
+    private val prefs: SharedPreferences =
+        appContext.getSharedPreferences("DriveUploadPrefs", Context.MODE_PRIVATE)
 
     companion object {
         const val LOG_FILE_NAME = "tight_poll_log.txt"
     }
 
+    /**
+     * The main work method for this worker.
+     * - Retrieves the account name, checks if the log file exists and has content.
+     * - Renames the log file for upload, attempts to upload it using DriveUploader, and handles success or failure.
+     */
     override suspend fun doWork(): Result {
-        val accountName = inputData.getString("ACCOUNT_NAME")
+        // Read the account name directly from SharedPreferences.
+        val accountName = prefs.getString("ACCOUNT_NAME", null)
         if (accountName.isNullOrEmpty()) {
-            Log.e("TightPollUploadWorker", "ERROR: Account name not provided.")
+            Log.e("TightPollUploadWorker", "ERROR: Account name not found in SharedPreferences.")
             return Result.failure()
         }
 
@@ -41,7 +47,6 @@ class TightPollUploadWorker(
             return Result.success()
         }
 
-        // To prevent race conditions, we rename the file before uploading.
         val uploadFile = File(applicationContext.cacheDir, "tight_poll_upload_${System.currentTimeMillis()}.txt")
         logFile.renameTo(uploadFile)
         Log.d("TightPollUploadWorker", "Renamed log file to ${uploadFile.name} for upload.")
@@ -53,19 +58,16 @@ class TightPollUploadWorker(
                 Result.success()
             } else {
                 Log.e("TightPollUploadWorker", "ERROR: Upload failed.")
-                // Rename back on failure so we don't lose the data.
                 uploadFile.renameTo(logFile)
                 Result.failure()
             }
         } catch (e: Exception) {
             Log.e("TightPollUploadWorker", "ERROR: Worker failed with an exception.", e)
-            uploadFile.renameTo(logFile) // Also rename back on exception.
+            uploadFile.renameTo(logFile)
             return Result.failure()
         } finally {
-            // Clean up the renamed file after the attempt.
             if (uploadFile.exists()) {
                 uploadFile.delete()
-                Log.d("TightPollUploadWorker", "Cleanup: Deleted temporary upload file.")
             }
         }
     }

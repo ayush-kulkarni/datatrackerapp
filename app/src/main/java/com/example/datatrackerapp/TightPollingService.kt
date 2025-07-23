@@ -19,7 +19,6 @@ import androidx.work.Constraints
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
-import androidx.work.workDataOf
 import com.google.android.gms.location.*
 import kotlinx.coroutines.*
 import java.io.File
@@ -28,10 +27,10 @@ import java.util.concurrent.TimeUnit
 import kotlin.math.abs
 
 /**
- * Service for tight polling of location and app usage.
- * - Manages foreground notification.
- * - Logs events to a file and triggers uploads.
- * - Responds to app install/uninstall events.
+ * TightPollingService is a background service responsible for continuously monitoring
+ * the device's location, foreground app usage, and app install events. It logs these
+ * events to a local file and triggers a background worker to upload the log to
+ * Google Drive on a 5-minute timeout.
  */
 class TightPollingService : Service() {
 
@@ -44,7 +43,6 @@ class TightPollingService : Service() {
     private var lastUploadRequestTime: Long = 0L
     private val uploadInterval = TimeUnit.MINUTES.toMillis(5)
     private lateinit var logFile: File
-    private var accountName: String? = null
 
     // State tracking variables
     private var lastSpeedAlertTime: Long = 0
@@ -57,60 +55,58 @@ class TightPollingService : Service() {
     }
 
     /**
-     * Called when the service is first created.
-     * - Initializes location client and callback.
-     * - Registers receiver for app install/uninstall.
+     * Initializes the service, sets up location client, location callback,
+     * registers the app install/uninstall receiver, and initializes the log file.
      */
     override fun onCreate() {
         super.onCreate()
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
         setupLocationCallback()
         registerAppInstallUninstallReceiver()
-        // Initialize the log file
+        // Initialize the log file that this service will write to.
         logFile = File(cacheDir, TightPollUploadWorker.LOG_FILE_NAME)
     }
 
     /**
-     * Called when the service is started with an intent.
-     * - Retrieves the account name.
-     * - Starts foreground service and polling.
-     * - Returns START_STICKY to ensure service restarts.
+     * Called when the service is started.
+     * Starts the foreground service with a notification, starts location updates,
+     * and starts app usage polling.
      */
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        // Retrieve the account name passed from MainActivity.
-        accountName = intent?.getStringExtra("ACCOUNT_NAME")
-        if (accountName == null) {
-            Log.e("TightPollingService", "Account name not provided. Stopping service.")
-            stopSelf()
-            return START_NOT_STICKY
-        }
-
         startForeground(NOTIFICATION_ID, createNotification())
+        Log.d("TightPollingService", "Service started.")
+
         startLocationUpdates()
         startAppUsagePolling()
+
         return START_STICKY
     }
 
     /**
      * Creates the notification for the foreground service.
-     * - Sets up notification channel.
-     * - Builds and returns the notification.
+     * Sets up the notification channel and builds the notification.
+     * @return The notification object.
      */
     private fun createNotification(): Notification {
         val channel = NotificationChannel(
-            NOTIFICATION_CHANNEL_ID, "Tight Polling Service", NotificationManager.IMPORTANCE_LOW
+            NOTIFICATION_CHANNEL_ID,
+            "Tight Polling Service",
+            NotificationManager.IMPORTANCE_LOW
         )
-        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(channel)
+
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setContentTitle("Data Tracker Active")
             .setContentText("Monitoring location and app usage.")
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.mipmap.ic_launcher) // Replace with your app's icon
             .build()
     }
 
     /**
-     * Sets up the location callback to handle location updates.
-     * - Calculates speed and logs speed alerts.
+     * Sets up the location callback to receive location updates.
+     * When a location update is received, it checks the speed and logs a speed alert
+     * if the speed is over 20 MPH and it has been more than an hour since the last alert.
      */
     private fun setupLocationCallback() {
         locationCallback = object : LocationCallback() {
@@ -123,8 +119,8 @@ class TightPollingService : Service() {
                         if (speedMph > 20 && (currentTime - lastSpeedAlertTime > TimeUnit.HOURS.toMillis(1))) {
                             lastSpeedAlertTime = currentTime
                             val logMessage = "Speed Alert: Speed of ${"%.2f".format(speedMph)} MPH detected at ${Date()}.\n" +
-                                    "Location: [https://www.google.com/maps?q=$](https://www.google.com/maps?q=$){location.latitude},${location.longitude}"
-                            // Log the event to a file instead of emailing.
+                                    "Location: https://www.google.com/maps?q=${location.latitude},${location.longitude}"
+                            // Log the event to a file.
                             logEvent(logMessage)
                         }
                     }
@@ -135,8 +131,8 @@ class TightPollingService : Service() {
 
     /**
      * Starts polling for foreground app usage.
-     * - Runs a coroutine to periodically check the foreground app.
-     * - Logs app launch events.
+     * Continuously checks the current foreground app and logs an event
+     * if the foreground app changes.
      */
     private fun startAppUsagePolling() {
         serviceScope.launch {
@@ -154,9 +150,9 @@ class TightPollingService : Service() {
     }
 
     /**
-     * Registers a BroadcastReceiver to listen for app install and uninstall events.
-     * - Creates an intent filter for package added/removed actions.
-     * - Logs the detected events.
+     * Registers a broadcast receiver to listen for app install and uninstall events.
+     * When an app is installed or uninstalled, it logs the event with the app name
+     * and package name.
      */
     private fun registerAppInstallUninstallReceiver() {
         appInstallUninstallReceiver = object : BroadcastReceiver() {
@@ -184,7 +180,8 @@ class TightPollingService : Service() {
 
     /**
      * Appends a message to the log file and triggers an upload if the 5-minute timeout has passed.
-     * This method is synchronized to be thread-safe.
+     * @param message The message to log.
+     * This function is synchronized to prevent concurrent file access issues.
      */
     @Synchronized
     private fun logEvent(message: String) {
@@ -204,32 +201,25 @@ class TightPollingService : Service() {
     }
 
     /**
-     * Enqueues the TightPollUploadWorker to run in the background.
+     * Enqueues the TightPollUploadWorker. It no longer needs to pass the account name,
+     * as the worker will get it from SharedPreferences. Sets network constraints for the worker.
+     *
      */
     private fun triggerUploadWorker() {
-        val currentAccountName = accountName
-        if (currentAccountName == null) {
-            Log.e("TightPollingService", "Cannot trigger upload, account name is null.")
-            return
-        }
-
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.CONNECTED)
             .build()
 
-        val inputData = workDataOf("ACCOUNT_NAME" to currentAccountName)
-
         val uploadWorkRequest = OneTimeWorkRequestBuilder<TightPollUploadWorker>()
             .setConstraints(constraints)
-            .setInputData(inputData)
             .build()
 
         WorkManager.getInstance(this).enqueue(uploadWorkRequest)
     }
 
     /**
-     * Starts requesting location updates from the FusedLocationProviderClient.
-     * - Checks for location permissions before requesting updates.
+     * Starts location updates using the FusedLocationProviderClient.
+     * Requests high accuracy location updates every 2 seconds.
      */
     private fun startLocationUpdates() {
         val locationRequest = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 2000).build()
@@ -239,9 +229,9 @@ class TightPollingService : Service() {
     }
 
     /**
-     * Called when the service is being destroyed.
-     * - Cleans up resources: stops location updates, unregisters receiver, cancels coroutine scope.
-     * - Logs service stop event.
+     * Called when the service is destroyed.
+     * Removes location updates, unregisters the app install/uninstall receiver,
+     * cancels the service scope, and logs that the service has stopped.
      */
     override fun onDestroy() {
         super.onDestroy()
@@ -252,14 +242,16 @@ class TightPollingService : Service() {
     }
 
     /**
-     * Called when a client binds to the service.
-     * - This service does not support binding, so it returns null.
+     * Returns null as this service is not designed to be bound.
+     * @param intent The Intent that was used to bind to this service.
+     * @return Return an IBinder through which clients can call on to the service.
      */
     override fun onBind(intent: Intent?): IBinder? = null
 
     /**
      * Retrieves the application name from its package name.
-     * - Uses PackageManager to get application info.
+     * @param packageName The package name of the application.
+     * @return The application name, or the package name if the name cannot be found.
      */
     private fun getAppNameFromPackageName(packageName: String): String {
         return try {

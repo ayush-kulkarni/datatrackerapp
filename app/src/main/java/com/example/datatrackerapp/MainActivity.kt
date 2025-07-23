@@ -28,24 +28,10 @@ import java.util.concurrent.TimeUnit
 import androidx.core.content.edit
 
 /**
- * The main activity of the application.
- * Handles user authentication (Google Sign-In) and requests necessary runtime permissions.
- * Once authenticated and permissions are granted, it schedules background tasks for data collection and upload.
- *
- * Key functions:
- * - `onCreate`: Initializes the activity, sets up UI elements, and starts the Google Sign-In process.
- * - `requestGoogleSignIn`: Initiates the Google Sign-In flow, handling new sign-ins or using existing ones.
- * - `checkRuntimePermissions`: Checks for required runtime permissions (Location, Phone State, Usage Stats) after successful Google Sign-In.
- * - `startServices`: If all permissions are granted, this function saves the Google account name and starts background services for data collection and uploading.
- * - `scheduleHourlyUploadWork`: Schedules a periodic background worker (using WorkManager) to collect and upload data hourly.
- * - `startTightPollingService`: Starts a foreground service for more frequent data polling.
- * - `hasUsageStatsPermission`: Checks if the app has the "Usage Access" permission, which is required for app usage tracking.
- *
- * ActivityResultLaunchers:
- * - `googleSignInLauncher`: Handles the result of the Google Sign-In intent.
- * - `requestPermissionLauncher`: Handles the result of runtime permission requests.
- *
+ * Main entry point of the application.
+ * Handles user authentication, permission requests, and service initialization.
  */
+
 class MainActivity : AppCompatActivity() {
 
     private lateinit var statusTextView: TextView
@@ -58,14 +44,13 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val account = task.getResult(ApiException::class.java)
                     Log.d("MainActivity", "Google Sign-In successful for ${account.email}")
-                    // After successful sign-in, check other permissions.
                     checkRuntimePermissions(account)
                 } catch (e: ApiException) {
                     Log.e("MainActivity", "Google Sign-In failed with status code: ${e.statusCode}")
-                    statusTextView.text = "Google Sign-In failed. Error code: ${e.statusCode}"
+                    "Google Sign-In failed. Error code: ${e.statusCode}".also { statusTextView.text = it }
                 }
             } else {
-                statusTextView.text = "Google Sign-In was cancelled by the user."
+                "Google Sign-In was cancelled by the user.".also { statusTextView.text = it }
             }
         }
 
@@ -74,41 +59,37 @@ class MainActivity : AppCompatActivity() {
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
             val account = GoogleSignIn.getLastSignedInAccount(this)
             if (permissions.values.all { it } && account != null) {
-                // If all permissions are granted, start the background services.
                 startServices(account)
             } else {
-                statusTextView.text = "Permissions denied. App cannot run."
+                "Permissions denied. App cannot run.".also { statusTextView.text = it }
                 Log.e("MainActivity", "Not all runtime permissions were granted.")
             }
         }
 
     /**
-     * - Initializes the activity.
-     * - Sets the content view and finds the status TextView.
-     * - Initiates the Google Sign-In process.
+     * Called when the activity is first created.
+     * Sets up the UI and initiates the Google Sign-In process.
+     * @param savedInstanceState If the activity is being re-initialized after previously being shut down then this Bundle contains the data it most recently supplied in onSaveInstanceState(Bundle).
      */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
         statusTextView = findViewById(R.id.status_textview)
-        // On app start, immediately begin the Google Sign-In process.
         requestGoogleSignIn()
     }
 
     /**
-     * - Updates the status TextView.
-     * - Configures Google Sign-In options, requesting email and Drive file scope.
-     * - If the user is not already signed in, launches the Google Sign-In intent.
-     * - Otherwise, proceeds to check other runtime permissions.
+     * Initiates the Google Sign-In flow.
+     * Checks if a user is already signed in.
+     * If not, launches the Google Sign-In intent.
      */
     private fun requestGoogleSignIn() {
-        statusTextView.text = "Requesting Google Sign-In..."
+        "Requesting Google Sign-In...".also { statusTextView.text = it }
         val gso = GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
             .requestEmail()
-            .requestScopes(Scope(DriveScopes.DRIVE_FILE)) // Request permission for Drive
+            .requestScopes(Scope(DriveScopes.DRIVE_FILE))
             .build()
         val signInClient = GoogleSignIn.getClient(this, gso)
-        // Check if a user is already signed in to avoid showing the dialog every time.
         val lastSignedInAccount = GoogleSignIn.getLastSignedInAccount(this)
         if (lastSignedInAccount == null) {
             googleSignInLauncher.launch(signInClient.signInIntent)
@@ -119,16 +100,16 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * - Checks if Usage Stats permission is granted. If not, prompts the user to grant it and returns.
-     * - Gathers a list of required runtime permissions (Location, Phone State, and Post Notifications for Android Tiramisu+).
-     * - Filters out already granted permissions.
-     * - If all permissions are granted, starts the background services. Otherwise, requests the missing permissions.
+     * Checks for standard runtime permissions after Google Sign-In is complete.
+     * Verifies Usage Stats permission.
+     * Requests location, phone state, and notification (Android Tiramisu+) permissions.
+     * @param account The signed-in Google account.
      */
     private fun checkRuntimePermissions(account: GoogleSignInAccount) {
         if (!hasUsageStatsPermission()) {
             Toast.makeText(this, "Please grant Usage Access permission", Toast.LENGTH_LONG).show()
             startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
-            statusTextView.text = "Waiting for Usage Access permission...\nPlease restart the app after granting."
+            "Waiting for Usage Access permission...\nPlease restart the app after granting.".also { statusTextView.text = it }
             return
         }
 
@@ -152,76 +133,68 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * - Retrieves the Google account name.
-     * - Saves the account name to SharedPreferences for other components to access.
-     * - Updates the status TextView.
-     * - Schedules the hourly data upload worker and starts the tight polling service.
+     * Starts the necessary background services after all permissions are granted.
+     * Saves the Google account name to SharedPreferences.
+     * Schedules the hourly data collection worker.
+     * Starts the tight polling foreground service.
+     * @param account The signed-in Google account.
      */
     private fun startServices(account: GoogleSignInAccount) {
-        val accountName = account.account?.name ?: run {
-            statusTextView.text = "Could not get account name."
-            return
-        }
+        val accountName = account.account?.name ?: return
 
-        // Save the account name to SharedPreferences so other components like
-        // the BroadcastReceiver can access it.
+        // Save the account name to SharedPreferences. This is now the single source of truth.
         val prefs: SharedPreferences = getSharedPreferences("DriveUploadPrefs", Context.MODE_PRIVATE)
         prefs.edit { putString("ACCOUNT_NAME", accountName) }
         Log.d("MainActivity", "Saved account name to SharedPreferences.")
 
-        statusTextView.text = "Starting services for ${account.email}"
-        scheduleHourlyUploadWork(accountName)
+        "Starting services for ${account.email}".also { statusTextView.text = it }
+        scheduleHourlyUploadWork() // No longer needs accountName
         startTightPollingService(accountName)
-//        triggerImmediateUploadForTesting(accountName)
-        statusTextView.text = "All services active."
+//        triggerImmediateUploadForTesting() // No longer needs accountName
+        "All services active.".also { statusTextView.text = it }
     }
 
     /**
-     * - Defines constraints for the worker (e.g., unmetered network).
-     * - Creates input data containing the Google account name.
-     * - Builds a periodic work request for `DataCollectionWorker` to run hourly.
-     * - Enqueues the unique periodic work request with WorkManager.
+     * Schedules a periodic background worker to collect data and upload it hourly.
+     * Configures constraints for the worker (e.g., unmetered network).
+     * Enqueues the work request with WorkManager.
      */
-    private fun scheduleHourlyUploadWork(accountName: String) {
+    private fun scheduleHourlyUploadWork() {
         val constraints = Constraints.Builder()
             .setRequiredNetworkType(NetworkType.UNMETERED)
             .build()
 
-        val inputData = workDataOf("ACCOUNT_NAME" to accountName)
-
-        val workRequest = PeriodicWorkRequestBuilder<DataCollectionWorker>(15, TimeUnit.MINUTES)
+        val workRequest = PeriodicWorkRequestBuilder<DataCollectionWorker>(1, TimeUnit.HOURS)
             .setConstraints(constraints)
-            .setInputData(inputData)
             .build()
 
         WorkManager.getInstance(this).enqueueUniquePeriodicWork(
             "HourlyDataPollAndUpload", ExistingPeriodicWorkPolicy.KEEP, workRequest
         )
-        Log.d("MainActivity", "Regular hourly upload worker scheduled for account: $accountName")
+        Log.d("MainActivity", "Regular hourly upload worker scheduled.")
     }
 
     /**
-     * This function is commented out but was intended for testing immediate uploads.
+     * Triggers an immediate one-time data upload for testing purposes.
+     * This function is typically commented out in production builds.
      */
-//    private fun triggerImmediateUploadForTesting(accountName: String) {
-//        Log.d("MainActivity", "Triggering immediate one-time upload for testing for account: $accountName")
+//    private fun triggerImmediateUploadForTesting() { // Removed accountName parameter
+//        Log.d("MainActivity", "Triggering immediate one-time upload for testing.")
 //        val constraints = Constraints.Builder()
 //            .setRequiredNetworkType(NetworkType.CONNECTED)
 //            .build()
 //
-//        val inputData = workDataOf("ACCOUNT_NAME" to accountName)
-//
 //        val testUploadWorkRequest = OneTimeWorkRequestBuilder<DataCollectionWorker>()
 //            .setConstraints(constraints)
-//            .setInputData(inputData)
 //            .build()
 //        WorkManager.getInstance(this).enqueue(testUploadWorkRequest)
 //    }
 
     /**
-     * - Creates an Intent for `TightPollingService`.
-     * - Puts the Google account name as an extra in the Intent.
-     * - Starts the foreground service.
+     * Starts the foreground service for tight polling, passing the account name.
+     * Creates an intent for the TightPollingService.
+     * Passes the Google account name as an extra to the service.
+     * @param accountName The name of the signed-in Google account.
      */
     private fun startTightPollingService(accountName: String) {
         val serviceIntent = Intent(this, TightPollingService::class.java).apply {
@@ -232,9 +205,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * - Gets the AppOpsManager system service.
-     * - Checks the operation status for GET_USAGE_STATS for the current app.
-     * - Returns true if the permission is allowed, false otherwise.
+     * Checks if the app has been granted the PACKAGE_USAGE_STATS permission.
+     * This permission is required to access app usage data.
+     * @return True if the permission is granted, false otherwise.
      */
     private fun hasUsageStatsPermission(): Boolean {
         val appOps = getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
