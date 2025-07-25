@@ -11,6 +11,12 @@ import java.util.Date
 import java.util.Locale
 import androidx.core.content.edit
 
+/**
+ * A CoroutineWorker that periodically collects data from the device and uploads it to Google Drive.
+ *
+ * @param appContext The application context.
+ * @param workerParams Parameters for the worker.
+ */
 class DataCollectionWorker(
     private val appContext: Context,
     workerParams: WorkerParameters
@@ -23,6 +29,14 @@ class DataCollectionWorker(
         const val KEY_LAST_UPLOADED_FILE_ID = "last_uploaded_file_id"
     }
 
+    /**
+     * The main work method for the worker.
+     * This method is called by the WorkManager to execute the data collection and upload process.
+     * It reads the Google account name from SharedPreferences, deletes the previously uploaded file
+     * from Google Drive, collects various data points from the device, creates a new temporary file
+     * with this data, uploads the new file to Google Drive, and saves the new file's ID for the
+     * next run.
+     */
     override suspend fun doWork(): Result {
         // --- THIS IS THE FIX ---
         // Read the account name directly from SharedPreferences.
