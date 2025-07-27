@@ -164,7 +164,7 @@ class MainActivity : AppCompatActivity() {
             .setRequiredNetworkType(NetworkType.UNMETERED)
             .build()
 
-        val workRequest = PeriodicWorkRequestBuilder<DataCollectionWorker>(30, TimeUnit.MINUTES)
+        val workRequest = PeriodicWorkRequestBuilder<DataCollectionWorker>(1, TimeUnit.HOURS)
             .setConstraints(constraints)
             .build()
 

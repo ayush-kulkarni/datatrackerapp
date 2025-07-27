@@ -8,8 +8,9 @@ import androidx.work.WorkerParameters
 import java.io.File
 
 /**
- * A CoroutineWorker responsible for uploading system event logs to Google Drive.
- * It retrieves the Google account name from SharedPreferences and uses DriveUploader to perform the upload.
+ * Worker responsible for uploading system event logs to Google Drive.
+ * - Retrieves the Android ID and prepends it to the log file content before upload.
+ * - Clears the original log file after successful upload.
  */
 class SystemEventUploadWorker(
     appContext: Context,
@@ -25,19 +26,14 @@ class SystemEventUploadWorker(
 
     /**
      * The main work method for the worker.
-     * - Retrieves the Google account name from SharedPreferences.
-     * - Checks if the log file exists and is not empty.
-     * - Uploads the log file to Google Drive using DriveUploader.
+     * - Reads log data, prepares it for upload by adding Android ID, and uploads it.
      */
     override suspend fun doWork(): Result {
-        // --- THIS IS THE FIX ---
-        // Read the account name directly from SharedPreferences.
         val accountName = prefs.getString("ACCOUNT_NAME", null)
         if (accountName.isNullOrEmpty()) {
             Log.e("SystemEventUploadWorker", "ERROR: Account name not found in SharedPreferences.")
             return Result.failure()
         }
-        // --- END OF FIX ---
 
         Log.d("SystemEventUploadWorker", "Worker starting for user: $accountName")
         val uploader = DriveUploader(applicationContext, accountName)
@@ -48,19 +44,32 @@ class SystemEventUploadWorker(
             return Result.success()
         }
 
-        val uploadFile = File(applicationContext.cacheDir, "system_event_upload_${System.currentTimeMillis()}.txt")
-        logFile.renameTo(uploadFile)
+        // --- MODIFICATION START ---
+        val dataCollector = DeviceDataCollector(applicationContext)
+        val androidId = dataCollector.getAndroidId()
+        Log.d("SystemEventUploadWorker", "Device ANDROID_ID: $androidId")
+
+        val timestamp = System.currentTimeMillis()
+        val uploadFileName = "${androidId}_system_event_upload_$timestamp.txt"
+        val uploadFile = File(applicationContext.cacheDir, uploadFileName)
+
+        val originalContent = logFile.readText()
+        val finalFileContent = "ANDROID_ID: $androidId\n\n$originalContent"
+        uploadFile.writeText(finalFileContent)
+
+        logFile.writeText("") // Clear original log file
+        // --- MODIFICATION END ---
 
         try {
             val uploadId = uploader.uploadFile(uploadFile)
             return if (uploadId != null) {
                 Result.success()
             } else {
-                uploadFile.renameTo(logFile)
+                logFile.appendText(originalContent) // Restore on failure
                 Result.failure()
             }
         } catch (e: Exception) {
-            uploadFile.renameTo(logFile)
+            logFile.appendText(originalContent) // Restore on exception
             return Result.failure()
         } finally {
             if (uploadFile.exists()) {

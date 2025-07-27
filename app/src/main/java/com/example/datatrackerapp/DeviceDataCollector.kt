@@ -13,6 +13,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.BatteryManager
 import android.os.SystemClock
+import android.provider.Settings
 import android.telephony.CellInfo
 import android.telephony.CellInfoGsm
 import android.telephony.CellInfoLte
@@ -51,6 +52,20 @@ class DeviceDataCollector(private val context: Context) {
     private val packageManager: PackageManager = context.packageManager
     // SensorManager is used to access device sensors like accelerometer, gyroscope, etc.
     private val sensorManager = context.getSystemService(Context.SENSOR_SERVICE) as SensorManager
+
+
+    /**
+     * NEW: Retrieves the ANDROID_ID, which is the recommended unique identifier
+     * for devices running Android 10 and above.
+     * @return The ANDROID_ID as a string, or a fallback string if it cannot be retrieved.
+     */
+    fun getAndroidId(): String {
+        return try {
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
+        } catch (e: Exception) {
+            "unknown_android_id"
+        }
+    }
 
     // Fetches and formats app usage statistics for the current day.
     fun getUsageStats(): String {

@@ -8,9 +8,8 @@ import androidx.work.WorkerParameters
 import java.io.File
 
 /**
- * Worker responsible for uploading the tight poll log file to Google Drive.
- * - Initializes SharedPreferences to retrieve the account name.
- * - Defines a companion object for constants like the log file name.
+ * A CoroutineWorker responsible for uploading the tight poll log file to Google Drive.
+ * It reads the log file, prepends the Android ID, uploads it, and then clears the original log file.
  */
 class TightPollUploadWorker(
     appContext: Context,
@@ -26,12 +25,12 @@ class TightPollUploadWorker(
     }
 
     /**
-     * The main work method for this worker.
-     * - Retrieves the account name, checks if the log file exists and has content.
-     * - Renames the log file for upload, attempts to upload it using DriveUploader, and handles success or failure.
+     * The main work method for the worker.
+     * - Retrieves the Google account name from SharedPreferences.
+     * - Reads the log file, prepends the Android ID, and uploads it to Google Drive.
+     * - Clears the original log file upon successful upload.
      */
     override suspend fun doWork(): Result {
-        // Read the account name directly from SharedPreferences.
         val accountName = prefs.getString("ACCOUNT_NAME", null)
         if (accountName.isNullOrEmpty()) {
             Log.e("TightPollUploadWorker", "ERROR: Account name not found in SharedPreferences.")
@@ -47,9 +46,24 @@ class TightPollUploadWorker(
             return Result.success()
         }
 
-        val uploadFile = File(applicationContext.cacheDir, "tight_poll_upload_${System.currentTimeMillis()}.txt")
-        logFile.renameTo(uploadFile)
-        Log.d("TightPollUploadWorker", "Renamed log file to ${uploadFile.name} for upload.")
+        // Get the Android ID to use in the filename and content.
+        val dataCollector = DeviceDataCollector(applicationContext)
+        val androidId = dataCollector.getAndroidId()
+        Log.d("TightPollUploadWorker", "Device ANDROID_ID: $androidId")
+
+        // Create a new filename with the Android ID.
+        val timestamp = System.currentTimeMillis()
+        val uploadFileName = "${androidId}_tight_poll_upload_$timestamp.txt"
+        val uploadFile = File(applicationContext.cacheDir, uploadFileName)
+
+        // Read the original content, prepend the ID, and write to the new upload file.
+        val originalContent = logFile.readText()
+        val finalFileContent = "ANDROID_ID: $androidId\n\n$originalContent"
+        uploadFile.writeText(finalFileContent)
+
+        // Clear the original log file now that its content has been moved.
+        logFile.writeText("")
+        Log.d("TightPollUploadWorker", "Moved content from ${logFile.name} to ${uploadFile.name} for upload.")
 
         try {
             val uploadId = uploader.uploadFile(uploadFile)
@@ -57,15 +71,17 @@ class TightPollUploadWorker(
                 Log.d("TightPollUploadWorker", "SUCCESS: Upload complete.")
                 Result.success()
             } else {
-                Log.e("TightPollUploadWorker", "ERROR: Upload failed.")
-                uploadFile.renameTo(logFile)
+                Log.e("TightPollUploadWorker", "ERROR: Upload failed. Appending content back to main log.")
+                // If upload fails, append the content back to the original log file so it's not lost.
+                logFile.appendText(originalContent)
                 Result.failure()
             }
         } catch (e: Exception) {
             Log.e("TightPollUploadWorker", "ERROR: Worker failed with an exception.", e)
-            uploadFile.renameTo(logFile)
+            logFile.appendText(originalContent) // Also restore on exception.
             return Result.failure()
         } finally {
+            // Clean up the temporary upload file.
             if (uploadFile.exists()) {
                 uploadFile.delete()
             }
