@@ -38,21 +38,21 @@ class DriveUploader(context: Context, accountName: String) {
      * - Checks if a file ID is provided.
      * - Attempts to delete the file and logs success or failure.
      */
-    suspend fun deletePreviousFile(fileId: String?) {
-        if (fileId.isNullOrEmpty()) {
-            Log.d("DriveUploader", "No previous file ID found to delete.")
-            return
-        }
-        try {
-            Log.d("DriveUploader", "Attempting to delete previous file with ID: $fileId")
-            drive.files().delete(fileId).execute()
-            Log.d("DriveUploader", "SUCCESS: Deleted previous file.")
-        } catch (e: Exception) {
-            // We log the error but don't fail the whole worker,
-            // as the main goal is to upload the new file.
-            Log.e("DriveUploader", "ERROR: Could not delete previous file.", e)
-        }
-    }
+//    suspend fun deletePreviousFile(fileId: String?) {
+//        if (fileId.isNullOrEmpty()) {
+//            Log.d("DriveUploader", "No previous file ID found to delete.")
+//            return
+//        }
+//        try {
+//            Log.d("DriveUploader", "Attempting to delete previous file with ID: $fileId")
+//            drive.files().delete(fileId).execute()
+//            Log.d("DriveUploader", "SUCCESS: Deleted previous file.")
+//        } catch (e: Exception) {
+//            // We log the error but don't fail the whole worker,
+//            // as the main goal is to upload the new file.
+//            Log.e("DriveUploader", "ERROR: Could not delete previous file.", e)
+//        }
+//    }
 
     /**
      * Uploads a local file to a specific folder in Google Drive.

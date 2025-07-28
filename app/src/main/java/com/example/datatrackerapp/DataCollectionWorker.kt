@@ -22,9 +22,9 @@ class DataCollectionWorker(
     private val prefs: SharedPreferences =
         appContext.getSharedPreferences("DriveUploadPrefs", Context.MODE_PRIVATE)
 
-    companion object {
-        const val KEY_LAST_UPLOADED_FILE_ID = "last_uploaded_file_id"
-    }
+//    companion object {
+//        const val KEY_LAST_UPLOADED_FILE_ID = "last_uploaded_file_id"
+//    }
 
     /**
      * This function is the entry point for the worker.
@@ -42,8 +42,8 @@ class DataCollectionWorker(
         var tempLogFile: File? = null
 
         try {
-            val lastFileId = prefs.getString(KEY_LAST_UPLOADED_FILE_ID, null)
-            uploader.deletePreviousFile(lastFileId)
+//            val lastFileId = prefs.getString(KEY_LAST_UPLOADED_FILE_ID, null)
+//            uploader.deletePreviousFile(lastFileId)
 
             val dataCollector = DeviceDataCollector(appContext)
 
@@ -70,8 +70,9 @@ class DataCollectionWorker(
             val newFileId = uploader.uploadFile(tempLogFile)
 
             if (newFileId != null) {
-                prefs.edit { putString(KEY_LAST_UPLOADED_FILE_ID, newFileId) }
-                Log.d("DataCollectionWorker", "SUCCESS: New file ID $newFileId saved.")
+//                prefs.edit { putString(KEY_LAST_UPLOADED_FILE_ID, newFileId) }
+//                Log.d("DataCollectionWorker", "SUCCESS: New file ID $newFileId saved.")
+                Log.d("DataCollectionWorker", "SUCCESS: Upload complete.")
                 return Result.success()
             } else {
                 Log.e("DataCollectionWorker", "ERROR: Upload failed.")
@@ -81,6 +82,7 @@ class DataCollectionWorker(
             Log.e("DataCollectionWorker", "ERROR: Worker failed with an exception.", e)
             return Result.failure()
         } finally {
+            // Clean up temporary file
             tempLogFile?.delete()
         }
     }
