@@ -49,6 +49,8 @@ class TightPollingService : Service() {
     private var lastKnownForegroundApp: String? = null
     private var lastKnownSpeedMph: Float = -1.0f
 
+    private lateinit var deviceName: String
+
     companion object {
         const val NOTIFICATION_ID = 101
         const val NOTIFICATION_CHANNEL_ID = "TightPollingChannel"
@@ -65,6 +67,9 @@ class TightPollingService : Service() {
         registerAppInstallUninstallReceiver()
         // Initialize the log file that this service will write to.
         logFile = File(cacheDir, TightPollUploadWorker.LOG_FILE_NAME)
+        val dataCollector = DeviceDataCollector(this)
+        deviceName = dataCollector.getSimpleDeviceName()
+        Log.d("TightPollingService", "Service created for device: $deviceName")
     }
 
     /**
@@ -118,9 +123,9 @@ class TightPollingService : Service() {
                         val currentTime = System.currentTimeMillis()
                         if (speedMph > 20 && (currentTime - lastSpeedAlertTime > TimeUnit.HOURS.toMillis(1))) {
                             lastSpeedAlertTime = currentTime
-                            val logMessage = "Speed Alert: Speed of ${"%.2f".format(speedMph)} MPH detected at ${Date()}.\n" +
-                                    "Location: https://www.google.com/maps?q=${location.latitude},${location.longitude}"
-                            // Log the event to a file.
+                            // Prepend the device name to the log message
+                            val logMessage = "[$deviceName] Speed Alert: Speed of ${"%.2f".format(speedMph)} MPH detected at ${Date()}.\n" +
+                                    "Location: [https://www.google.com/maps?q=$](https://www.google.com/maps?q=$){location.latitude},${location.longitude}"
                             logEvent(logMessage)
                         }
                     }
@@ -140,8 +145,8 @@ class TightPollingService : Service() {
                 val currentForegroundApp = UsageStatsPoller.getForegroundApp(this@TightPollingService)
                 if (currentForegroundApp != null && currentForegroundApp != lastKnownForegroundApp) {
                     lastKnownForegroundApp = currentForegroundApp
-                    val logMessage = "App Launch Detected: $currentForegroundApp at ${Date()}"
-                    // Log the event to a file.
+                    // Prepend the device name to the log message
+                    val logMessage = "[$deviceName] App Launch Detected: $currentForegroundApp at ${Date()}"
                     logEvent(logMessage)
                 }
                 delay(2000)
@@ -160,12 +165,12 @@ class TightPollingService : Service() {
                 intent?.data?.schemeSpecificPart?.let { packageName ->
                     val action = intent.action
                     val appName = getAppNameFromPackageName(packageName)
+                    // Prepend the device name to the log message
                     val logMessage = when (action) {
-                        Intent.ACTION_PACKAGE_ADDED -> "App Installed Detected: $appName ($packageName) at ${Date()}"
-                        Intent.ACTION_PACKAGE_REMOVED -> "App Uninstalled Detected: $appName ($packageName) at ${Date()}"
+                        Intent.ACTION_PACKAGE_ADDED -> "[$deviceName] App Installed Detected: $appName ($packageName) at ${Date()}"
+                        Intent.ACTION_PACKAGE_REMOVED -> "[$deviceName] App Uninstalled Detected: $appName ($packageName) at ${Date()}"
                         else -> return
                     }
-                    // Log the event to a file.
                     logEvent(logMessage)
                 }
             }

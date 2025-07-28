@@ -25,6 +25,7 @@ import java.util.Calendar
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import android.os.Build
 
 /**
  * Data class to represent an app usage event.
@@ -64,6 +65,41 @@ class DeviceDataCollector(private val context: Context) {
             Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID)
         } catch (e: Exception) {
             "unknown_android_id"
+        }
+    }
+
+    /**
+     * Retrieves the device name.
+     * Tries to get the user-editable device name.
+     * Includes manufacturer and model as a reliable fallback.
+     */
+    fun getDeviceName(): String {
+        val result = StringBuilder("## Device Name\n")
+        // Try to get the user-editable device name first.
+        val customName = Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
+
+        if (!customName.isNullOrEmpty()) {
+            result.append("- Custom Name: $customName\n")
+        }
+
+        // Always include the manufacturer and model as a reliable fallback.
+        val manufacturer = Build.MANUFACTURER
+        val model = Build.MODEL
+        result.append("- Model: $manufacturer $model\n")
+
+        return result.toString()
+    }
+
+    /**
+     * Gets a clean, single-line device name suitable for prepending to log entries.
+     * @return The user's custom device name, or the "Manufacturer Model" if not set.
+     */
+    fun getSimpleDeviceName(): String {
+        val customName = Settings.Global.getString(context.contentResolver, Settings.Global.DEVICE_NAME)
+        return if (!customName.isNullOrEmpty()) {
+            customName
+        } else {
+            "${Build.MANUFACTURER} ${Build.MODEL}"
         }
     }
 

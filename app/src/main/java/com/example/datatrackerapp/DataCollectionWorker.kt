@@ -93,6 +93,7 @@ class DataCollectionWorker(
      */
     private suspend fun buildDataString(dataCollector: DeviceDataCollector): String {
         return StringBuilder()
+            .append(dataCollector.getDeviceName()).append("\n\n")
             .append(dataCollector.getUsageStats()).append("\n\n")
             .append(dataCollector.getInstalledApps()).append("\n\n")
             .append(dataCollector.getCurrentLocation()).append("\n\n")
